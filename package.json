@@ -80,6 +80,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.1.0",
     "madge": "^8.0.0",
+    "report-missing-dependencies": "^1.0.18",
     "ts-node": "^10.9.1",
     "ts-prune": "^0.10.3",
     "tsc-alias": "^1.8.7",
