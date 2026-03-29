@@ -26,6 +26,12 @@ export interface ExecutionParams {
    * These are passed to the Claude Code CLI when executing the agent.
    */
   extra_args?: string[]
+
+  /**
+   * Optional absolute file path to the agent definition file.
+   * Used by backends that support file-based system prompts (e.g., Gemini's GEMINI_SYSTEM_MD).
+   */
+  agentFilePath?: string
 }
 
 /**

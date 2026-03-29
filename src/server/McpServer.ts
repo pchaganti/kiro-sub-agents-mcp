@@ -81,6 +81,7 @@ export class McpServer {
     const executionConfig = createExecutionConfig(config.agentType, {
       executionTimeout: config.executionTimeoutMs, // Use timeout from config (env var or 90s default)
       ...(config.agentsSettingsPath && { agentsSettingsPath: config.agentsSettingsPath }),
+      ...(config.cursorApiKey && { cursorApiKey: config.cursorApiKey }),
     })
 
     // Create logger with log level from config
