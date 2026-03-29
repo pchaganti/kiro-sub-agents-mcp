@@ -46,6 +46,9 @@ export class ServerConfig {
   /** Path to CLI settings file/directory for agent execution */
   public readonly agentsSettingsPath: string | undefined
 
+  /** API key for cursor-agent authentication (from CURSOR_API_KEY or CLI_API_KEY env var) */
+  public readonly cursorApiKey: string | undefined
+
   /**
    * Creates a new ServerConfig instance by loading values from environment variables
    * or using default values.
@@ -107,5 +110,8 @@ export class ServerConfig {
     // - Codex: set as CODEX_HOME environment variable
     // - Gemini: not supported (upstream limitation)
     this.agentsSettingsPath = process.env['AGENTS_SETTINGS_PATH'] || undefined
+
+    // Cursor API key: prefer CURSOR_API_KEY, fall back to CLI_API_KEY for backward compatibility
+    this.cursorApiKey = process.env['CURSOR_API_KEY'] || process.env['CLI_API_KEY'] || undefined
   }
 }

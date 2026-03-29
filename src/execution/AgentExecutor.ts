@@ -70,6 +70,12 @@ export interface ExecutionConfig {
    * - gemini: not supported (ignored)
    */
   agentsSettingsPath?: string
+
+  /**
+   * API key for cursor-agent authentication.
+   * Passed to cursor-agent via CURSOR_API_KEY environment variable.
+   */
+  cursorApiKey?: string
 }
 
 export const DEFAULT_EXECUTION_TIMEOUT = 300000 // 5 minutes
@@ -134,7 +140,7 @@ export class AgentExecutor {
    */
   async executeAgent(params: ExecutionParams): Promise<AgentExecutionResult> {
     // Input validation
-    if (!params || !params.agent || !params.prompt) {
+    if (!params?.agent || !params.prompt) {
       const error = 'Invalid execution parameters: agent and prompt are required'
       this.logger.error('Agent execution failed during validation', undefined, { error, params })
       throw new Error(error)
@@ -212,6 +218,90 @@ export class AgentExecutor {
   }
 
   /**
+   * Builds CLI-specific command, args, and environment overrides.
+   *
+   * - Claude: uses --append-system-prompt to separate agent definition from user prompt
+   * - Gemini: uses GEMINI_SYSTEM_MD env var pointing to the agent definition file
+   * - Codex/Cursor: concatenates system context and user prompt (no separation)
+   *
+   * @private
+   */
+  private buildCommandArgs(params: ExecutionParams): {
+    command: string
+    args: string[]
+    envOverrides: Record<string, string>
+  } {
+    const envOverrides: Record<string, string> = {}
+
+    // Apply CLI-specific settings path configuration
+    if (this.config.agentsSettingsPath) {
+      switch (this.config.agentType) {
+        case 'cursor':
+          envOverrides['CURSOR_CONFIG_DIR'] = this.config.agentsSettingsPath
+          break
+        case 'codex':
+          envOverrides['CODEX_HOME'] = this.config.agentsSettingsPath
+          break
+        // claude: handled via --settings argument below
+        // gemini: not supported (upstream limitation)
+      }
+    }
+
+    if (this.config.agentType === 'codex') {
+      const formattedPrompt = `[System Context]\n${params.agent}\n\n[User Prompt]\n${params.prompt}`
+      return { command: 'codex', args: ['exec', '--json', formattedPrompt], envOverrides }
+    }
+
+    // Determine command
+    const command =
+      this.config.agentType === 'claude'
+        ? 'claude'
+        : this.config.agentType === 'gemini'
+          ? 'gemini'
+          : 'cursor-agent'
+
+    let args: string[]
+
+    if (this.config.agentType === 'claude') {
+      // Claude: separate system prompt via --append-system-prompt
+      const cwd = params.cwd || process.cwd()
+      const systemPrompt = `cwd: ${cwd}\n\n${params.agent}`
+      args = [
+        '--output-format',
+        'stream-json',
+        '--verbose',
+        '--append-system-prompt',
+        systemPrompt,
+        '-p',
+        params.prompt,
+      ]
+
+      if (this.config.agentsSettingsPath) {
+        args.push('--settings', this.config.agentsSettingsPath)
+      }
+    } else if (this.config.agentType === 'gemini' && params.agentFilePath) {
+      // Gemini: pass agent file as system prompt via env var
+      args = ['--output-format', 'stream-json', '-p', params.prompt]
+      envOverrides['GEMINI_SYSTEM_MD'] = params.agentFilePath
+    } else {
+      // Cursor or Gemini without agentFilePath: concatenate as before
+      const formattedPrompt = `[System Context]\n${params.agent}\n\n[User Prompt]\n${params.prompt}`
+      if (this.config.agentType === 'gemini') {
+        args = ['--output-format', 'stream-json', '-p', formattedPrompt]
+      } else {
+        args = ['--output-format', 'json', '-p', formattedPrompt]
+      }
+    }
+
+    // Pass API key for cursor-agent via environment variable (not CLI arg, to avoid ps exposure)
+    if (this.config.agentType === 'cursor' && this.config.cursorApiKey) {
+      envOverrides['CURSOR_API_KEY'] = this.config.cursorApiKey
+    }
+
+    return { command, args, envOverrides }
+  }
+
+  /**
    * Executes an agent using child_process.spawn for proper TTY handling.
    *
    * @private
@@ -226,63 +316,11 @@ export class AgentExecutor {
     resultJson?: unknown
   }> {
     return new Promise((resolve) => {
-      // Generate command and args based on agent type
-      const formattedPrompt = `[System Context]\n${params.agent}\n\n[User Prompt]\n${params.prompt}`
-
-      let command: string
-      let args: string[]
-
-      if (this.config.agentType === 'codex') {
-        // Codex uses different command structure: codex exec --json "prompt"
-        command = 'codex'
-        args = ['exec', '--json', formattedPrompt]
-      } else {
-        // Cursor, Claude, Gemini use similar interface with -p flag
-        // Claude/Gemini: Use stream-json for real-time output (avoids buffering issues)
-        // Cursor: Use json (single JSON response)
-        if (this.config.agentType === 'claude') {
-          // Claude needs --verbose with stream-json for proper line-by-line flushing
-          args = ['--output-format', 'stream-json', '--verbose', '-p', formattedPrompt]
-        } else if (this.config.agentType === 'gemini') {
-          args = ['--output-format', 'stream-json', '-p', formattedPrompt]
-        } else {
-          args = ['--output-format', 'json', '-p', formattedPrompt]
-        }
-
-        // Determine command based on agent type
-        command =
-          this.config.agentType === 'claude'
-            ? 'claude'
-            : this.config.agentType === 'gemini'
-              ? 'gemini'
-              : 'cursor-agent'
-
-        // Add API key for cursor-cli if available
-        if (this.config.agentType === 'cursor' && process.env['CLI_API_KEY']) {
-          args.push('-a', process.env['CLI_API_KEY'])
-        }
-
-        // Add --settings for Claude when agentsSettingsPath is configured
-        if (this.config.agentType === 'claude' && this.config.agentsSettingsPath) {
-          args.push('--settings', this.config.agentsSettingsPath)
-        }
-      }
+      // Build command, args, and env based on agent type with system prompt separation
+      const { command, args, envOverrides } = this.buildCommandArgs(params)
 
       // Build environment variables for spawn
-      // Apply CLI-specific settings path configuration
-      const spawnEnv: NodeJS.ProcessEnv = { ...process.env }
-      if (this.config.agentsSettingsPath) {
-        switch (this.config.agentType) {
-          case 'cursor':
-            spawnEnv['CURSOR_CONFIG_DIR'] = this.config.agentsSettingsPath
-            break
-          case 'codex':
-            spawnEnv['CODEX_HOME'] = this.config.agentsSettingsPath
-            break
-          // claude: handled via --settings argument above
-          // gemini: not supported (upstream limitation)
-        }
-      }
+      const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...envOverrides }
 
       this.logger.debug('Executing with spawn', {
         command,

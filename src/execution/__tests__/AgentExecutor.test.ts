@@ -14,100 +14,69 @@ vi.mock('node:child_process', () => ({
 // Import the mocked module to get references
 import { spawn as mockSpawn } from 'node:child_process'
 
-describe('AgentExecutor', () => {
-  let executor: AgentExecutor
+/**
+ * Creates a minimal mock process for spawn.
+ * Each test configures its own mock via mockImplementationOnce.
+ */
+function createMockProcess(options: {
+  stdoutData?: string
+  stdoutDelay?: number
+  stderrData?: string
+  exitCode?: number
+  closeDelay?: number
+  noClose?: boolean
+  triggerError?: Error
+}) {
+  const {
+    stdoutData,
+    stdoutDelay = 10,
+    stderrData,
+    exitCode = 0,
+    closeDelay = 50,
+    noClose = false,
+    triggerError,
+  } = options
 
+  return {
+    stdin: { end: vi.fn() },
+    stdout: {
+      on: vi.fn((event: string, callback: (data: Buffer) => void) => {
+        if (event === 'data' && stdoutData) {
+          setTimeout(() => callback(Buffer.from(stdoutData)), stdoutDelay)
+        }
+      }),
+    },
+    stderr: {
+      on: vi.fn((event: string, callback: (data: Buffer) => void) => {
+        if (event === 'data' && stderrData) {
+          setTimeout(() => callback(Buffer.from(stderrData)), stdoutDelay)
+        }
+      }),
+    },
+    on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
+      if (event === 'close' && !noClose) {
+        setTimeout(() => callback(exitCode), closeDelay)
+      }
+      if (event === 'error' && triggerError) {
+        setTimeout(() => callback(triggerError), stdoutDelay)
+      }
+    }),
+    kill: vi.fn(),
+  } as any
+}
+
+/** Creates a success mock process that emits a JSON result */
+function createSuccessMock(data = 'Test execution successful') {
+  return createMockProcess({
+    stdoutData: `${JSON.stringify({ type: 'result', data })}\n`,
+  })
+}
+
+describe('AgentExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    const testConfig = createExecutionConfig('cursor') // Use real agent type
-    executor = new AgentExecutor(testConfig)
-
-    // Setup spawn mock
-    mockSpawn.mockImplementation((_cmd: string, args: string[], _options: any) => {
-      // Extract the prompt which should be the last argument after -p flag
-      const promptIndex = args.indexOf('-p')
-      const prompt = promptIndex >= 0 && promptIndex < args.length - 1 ? args[promptIndex + 1] : ''
-      // Check if the prompt contains agent information formatted as "agent: prompt text"
-      const isTestAgent = prompt.includes('test-agent')
-      const isBadAgent = prompt.includes('bad-agent') || prompt.includes('nonexistent-agent')
-      const isSlowAgent = prompt.includes('slow-agent')
-
-      const mockProcess = {
-        stdin: {
-          end: vi.fn(),
-        },
-        stdout: {
-          on: vi.fn((event, callback) => {
-            if (event === 'data') {
-              if (isTestAgent) {
-                // Success case - simulate single JSON response (--output-format json)
-                setTimeout(() => {
-                  // Send only the final result JSON
-                  callback(
-                    Buffer.from(
-                      `${JSON.stringify({
-                        type: 'result',
-                        data: 'Test execution successful',
-                      })}\n`
-                    )
-                  )
-                }, 10)
-              } else if (isBadAgent || isSlowAgent) {
-                // Don't send successful data for bad agents or slow agents
-              } else {
-                // Default success - send result JSON (cursor format)
-                setTimeout(() => {
-                  callback(
-                    Buffer.from(
-                      `${JSON.stringify({
-                        type: 'result',
-                        data: 'Default execution',
-                      })}\n`
-                    )
-                  )
-                }, 10)
-              }
-            }
-          }),
-        },
-        stderr: {
-          on: vi.fn((event, callback) => {
-            if (event === 'data') {
-              if (isBadAgent) {
-                setTimeout(() => {
-                  callback(Buffer.from('Agent not found or execution failed'))
-                }, 10)
-              } else if (isSlowAgent) {
-                // Don't send stderr for slow agent, let it timeout
-              }
-            }
-          }),
-        },
-        on: vi.fn((event, callback) => {
-          if (event === 'close') {
-            if (isSlowAgent) {
-              // For slow agent, don't call close callback to simulate timeout
-              // The timeout handler in AgentExecutor will kill the process
-            } else {
-              // Simulate process close with appropriate exit code
-              const exitCode = isBadAgent ? 1 : 0
-              setTimeout(() => callback(exitCode), 50)
-            }
-          } else if (event === 'error' && isBadAgent) {
-            // Trigger error for invalid scenarios
-            setTimeout(() => {
-              callback(new Error('Spawn execution failed'))
-            }, 10)
-          } else if (event === 'exit') {
-            if (!isSlowAgent) {
-              setTimeout(() => callback(), 50)
-            }
-          }
-        }),
-        kill: vi.fn(),
-      }
-      return mockProcess as any
-    })
+    // Default: success mock. Tests that need different behavior override with mockImplementationOnce.
+    mockSpawn.mockImplementation(() => createSuccessMock())
   })
 
   afterEach(() => {
@@ -152,69 +121,59 @@ describe('AgentExecutor', () => {
 
       expect(config.agentsSettingsPath).toBeUndefined()
     })
+
+    it('should allow setting cursorApiKey', () => {
+      const config = createExecutionConfig('cursor', {
+        cursorApiKey: 'test-key-123',
+      })
+
+      expect(config.cursorApiKey).toBe('test-key-123')
+    })
   })
 
   describe('command generation', () => {
     it('should use cursor-agent command for cursor type', async () => {
-      const cursorConfig = createExecutionConfig('cursor')
-      const cursorExecutor = new AgentExecutor(cursorConfig)
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await cursorExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith('cursor-agent', expect.any(Array), expect.any(Object))
     })
 
     it('should use claude command for claude type', async () => {
-      const claudeConfig = createExecutionConfig('claude')
-      const claudeExecutor = new AgentExecutor(claudeConfig)
+      const executor = new AgentExecutor(createExecutionConfig('claude'))
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await claudeExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith('claude', expect.any(Array), expect.any(Object))
     })
 
     it('should use gemini command for gemini type', async () => {
-      const geminiConfig = createExecutionConfig('gemini')
-      const geminiExecutor = new AgentExecutor(geminiConfig)
+      const executor = new AgentExecutor(createExecutionConfig('gemini'))
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await geminiExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith('gemini', expect.any(Array), expect.any(Object))
+    })
+
+    it('should use codex command for codex type', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('codex'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      expect(mockSpawn).toHaveBeenCalledWith('codex', expect.any(Array), expect.any(Object))
     })
   })
 
   describe('agentsSettingsPath handling', () => {
     it('should pass --settings argument for claude when agentsSettingsPath is set', async () => {
-      const claudeConfig = createExecutionConfig('claude', {
-        agentsSettingsPath: '/path/to/claude/settings.json',
-      })
-      const claudeExecutor = new AgentExecutor(claudeConfig)
+      const executor = new AgentExecutor(
+        createExecutionConfig('claude', {
+          agentsSettingsPath: '/path/to/claude/settings.json',
+        })
+      )
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await claudeExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'claude',
@@ -224,18 +183,13 @@ describe('AgentExecutor', () => {
     })
 
     it('should set CURSOR_CONFIG_DIR env for cursor when agentsSettingsPath is set', async () => {
-      const cursorConfig = createExecutionConfig('cursor', {
-        agentsSettingsPath: '/path/to/cursor/config',
-      })
-      const cursorExecutor = new AgentExecutor(cursorConfig)
+      const executor = new AgentExecutor(
+        createExecutionConfig('cursor', {
+          agentsSettingsPath: '/path/to/cursor/config',
+        })
+      )
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await cursorExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'cursor-agent',
@@ -249,18 +203,13 @@ describe('AgentExecutor', () => {
     })
 
     it('should set CODEX_HOME env for codex when agentsSettingsPath is set', async () => {
-      const codexConfig = createExecutionConfig('codex', {
-        agentsSettingsPath: '/path/to/codex/home',
-      })
-      const codexExecutor = new AgentExecutor(codexConfig)
+      const executor = new AgentExecutor(
+        createExecutionConfig('codex', {
+          agentsSettingsPath: '/path/to/codex/home',
+        })
+      )
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
-
-      await codexExecutor.executeAgent(params)
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'codex',
@@ -274,90 +223,208 @@ describe('AgentExecutor', () => {
     })
 
     it('should not modify env for gemini when agentsSettingsPath is set', async () => {
-      const _originalEnv = { ...process.env }
-      const geminiConfig = createExecutionConfig('gemini', {
-        agentsSettingsPath: '/path/to/gemini/settings',
-      })
-      const geminiExecutor = new AgentExecutor(geminiConfig)
+      const executor = new AgentExecutor(
+        createExecutionConfig('gemini', {
+          agentsSettingsPath: '/path/to/gemini/settings',
+        })
+      )
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
-      await geminiExecutor.executeAgent(params)
-
-      // Should not have GEMINI_CONFIG_DIR or similar in env
-      const spawnCall = mockSpawn.mock.calls[0]
-      const spawnEnv = spawnCall[2].env
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
       expect(spawnEnv['GEMINI_CONFIG_DIR']).toBeUndefined()
       expect(spawnEnv['GEMINI_HOME']).toBeUndefined()
     })
 
     it('should not pass --settings for claude when agentsSettingsPath is not set', async () => {
-      const claudeConfig = createExecutionConfig('claude')
-      const claudeExecutor = new AgentExecutor(claudeConfig)
+      const executor = new AgentExecutor(createExecutionConfig('claude'))
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
-      await claudeExecutor.executeAgent(params)
-
-      const spawnCall = mockSpawn.mock.calls[0]
-      const args = spawnCall[1]
+      const args = mockSpawn.mock.calls[0][1]
       expect(args).not.toContain('--settings')
     })
 
     it('should not set CURSOR_CONFIG_DIR env for cursor when agentsSettingsPath is not set', async () => {
-      const cursorConfig = createExecutionConfig('cursor')
-      const cursorExecutor = new AgentExecutor(cursorConfig)
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
 
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Test prompt',
-        cwd: '/tmp',
-      }
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
 
-      await cursorExecutor.executeAgent(params)
-
-      const spawnCall = mockSpawn.mock.calls[0]
-      const spawnEnv = spawnCall[2].env
-      // CURSOR_CONFIG_DIR should not be explicitly set (may exist from process.env but not added by us)
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
       expect(spawnEnv['CURSOR_CONFIG_DIR']).toBeUndefined()
     })
 
     it('should not set CODEX_HOME env for codex when agentsSettingsPath is not set', async () => {
-      const codexConfig = createExecutionConfig('codex')
-      const codexExecutor = new AgentExecutor(codexConfig)
+      const executor = new AgentExecutor(createExecutionConfig('codex'))
 
-      const params: ExecutionParams = {
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
+      expect(spawnEnv['CODEX_HOME']).toBeUndefined()
+    })
+  })
+
+  describe('cursor API key handling', () => {
+    it('should set CURSOR_API_KEY env when cursorApiKey is configured', async () => {
+      const executor = new AgentExecutor(
+        createExecutionConfig('cursor', { cursorApiKey: 'secret-key-123' })
+      )
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
+      expect(spawnEnv['CURSOR_API_KEY']).toBe('secret-key-123')
+    })
+
+    it('should not pass API key as CLI argument (avoid ps exposure)', async () => {
+      const executor = new AgentExecutor(
+        createExecutionConfig('cursor', { cursorApiKey: 'secret-key-123' })
+      )
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      expect(args).not.toContain('-a')
+      expect(args).not.toContain('secret-key-123')
+    })
+
+    it('should not set CURSOR_API_KEY when cursorApiKey is not configured', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
+      expect(spawnEnv['CURSOR_API_KEY']).toBeUndefined()
+    })
+  })
+
+  describe('system prompt separation', () => {
+    it('should use --append-system-prompt for claude instead of concatenation', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('claude'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/test/cwd' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+
+      // Should have --append-system-prompt with cwd prefix and agent content
+      expect(args).toContain('--append-system-prompt')
+      const spIdx = args.indexOf('--append-system-prompt')
+      const systemPrompt = args[spIdx + 1]
+      expect(systemPrompt).toContain('cwd: /test/cwd')
+      expect(systemPrompt).toContain('test-agent')
+
+      // User prompt should be separate via -p (not concatenated)
+      const pIdx = args.indexOf('-p')
+      expect(args[pIdx + 1]).toBe('Test prompt')
+      expect(args[pIdx + 1]).not.toContain('[System Context]')
+    })
+
+    it('should use process.cwd() as cwd fallback in claude system prompt when cwd is omitted', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('claude'))
+      const expectedCwd = process.cwd()
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const spIdx = args.indexOf('--append-system-prompt')
+      const systemPrompt = args[spIdx + 1]
+      expect(systemPrompt).toContain(`cwd: ${expectedCwd}`)
+    })
+
+    it('should set GEMINI_SYSTEM_MD env for gemini when agentFilePath is provided', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('gemini'))
+
+      await executor.executeAgent({
         agent: 'test-agent',
         prompt: 'Test prompt',
         cwd: '/tmp',
-      }
+        agentFilePath: '/path/to/agent.md',
+      })
 
-      await codexExecutor.executeAgent(params)
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
+      expect(spawnEnv['GEMINI_SYSTEM_MD']).toBe('/path/to/agent.md')
 
-      const spawnCall = mockSpawn.mock.calls[0]
-      const spawnEnv = spawnCall[2].env
-      // CODEX_HOME should not be explicitly set (may exist from process.env but not added by us)
-      expect(spawnEnv['CODEX_HOME']).toBeUndefined()
+      // User prompt should be separate (not concatenated)
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const pIdx = args.indexOf('-p')
+      expect(args[pIdx + 1]).toBe('Test prompt')
+      expect(args[pIdx + 1]).not.toContain('[System Context]')
+    })
+
+    it('should set GEMINI_SYSTEM_MD correctly when agentsSettingsPath is also configured', async () => {
+      const executor = new AgentExecutor(
+        createExecutionConfig('gemini', {
+          agentsSettingsPath: '/path/to/settings',
+        })
+      )
+
+      await executor.executeAgent({
+        agent: 'test-agent',
+        prompt: 'Test prompt',
+        cwd: '/tmp',
+        agentFilePath: '/path/to/agent.md',
+      })
+
+      const spawnEnv = mockSpawn.mock.calls[0][2].env
+      expect(spawnEnv['GEMINI_SYSTEM_MD']).toBe('/path/to/agent.md')
+
+      // User prompt should still be separate
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const pIdx = args.indexOf('-p')
+      expect(args[pIdx + 1]).toBe('Test prompt')
+    })
+
+    it('should fall back to concatenation for gemini without agentFilePath', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('gemini'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const pIdx = args.indexOf('-p')
+      const promptArg = args[pIdx + 1]
+      expect(promptArg).toContain('[System Context]')
+      expect(promptArg).toContain('test-agent')
+      expect(promptArg).toContain('[User Prompt]')
+      expect(promptArg).toContain('Test prompt')
+    })
+
+    it('should concatenate for codex with both system context and user prompt', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('codex'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const promptArg = args[args.length - 1]
+      expect(promptArg).toContain('[System Context]')
+      expect(promptArg).toContain('test-agent')
+      expect(promptArg).toContain('[User Prompt]')
+      expect(promptArg).toContain('Test prompt')
+    })
+
+    it('should concatenate for cursor with both system context and user prompt', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
+
+      await executor.executeAgent({ agent: 'test-agent', prompt: 'Test prompt', cwd: '/tmp' })
+
+      const args = mockSpawn.mock.calls[0][1] as string[]
+      const pIdx = args.indexOf('-p')
+      const promptArg = args[pIdx + 1]
+      expect(promptArg).toContain('[System Context]')
+      expect(promptArg).toContain('test-agent')
+      expect(promptArg).toContain('[User Prompt]')
+      expect(promptArg).toContain('Test prompt')
     })
   })
 
   describe('executeAgent', () => {
     it('should return successful result with parsed JSON on success', async () => {
-      const params: ExecutionParams = {
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
+
+      const result = await executor.executeAgent({
         agent: 'test-agent',
         prompt: 'Help me',
         cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
+      })
 
       expect(result.exitCode).toBe(0)
       expect(result.hasResult).toBe(true)
@@ -369,228 +436,133 @@ describe('AgentExecutor', () => {
     })
 
     it('should return non-zero exit code and error message on failure', async () => {
-      const params: ExecutionParams = {
+      mockSpawn.mockImplementationOnce(() =>
+        createMockProcess({
+          stderrData: 'Agent not found or execution failed',
+          exitCode: 1,
+          triggerError: new Error('Spawn execution failed'),
+        })
+      )
+
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
+
+      const result = await executor.executeAgent({
         agent: 'nonexistent-agent',
         prompt: 'This should fail',
         cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
+      })
 
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr).toContain('Agent not found')
       expect(result.hasResult).toBe(false)
+      expect(result.resultJson).toBeUndefined()
     })
 
     it('should handle large prompts without truncation', async () => {
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
       const largePrompt = 'Generate detailed documentation'.repeat(200)
-      const params: ExecutionParams = {
+
+      const result = await executor.executeAgent({
         agent: 'test-agent',
         prompt: largePrompt,
         cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
+      })
 
       expect(result.exitCode).toBe(0)
       expect(result.hasResult).toBe(true)
-      // Verify prompt was passed to spawn (check mock was called with prompt containing full text)
       expect(mockSpawn).toHaveBeenCalledWith(
         expect.any(String),
         expect.arrayContaining(['-p', expect.stringContaining('Generate detailed documentation')]),
         expect.any(Object)
       )
     })
-
-    it('should return error details when agent execution fails', async () => {
-      const params: ExecutionParams = {
-        agent: 'bad-agent',
-        prompt: 'This should fail',
-        cwd: '/invalid-directory',
-      }
-
-      const result = await executor.executeAgent(params)
-
-      expect(result.exitCode).not.toBe(0)
-      expect(result.stderr).toBeTruthy()
-      expect(result.hasResult).toBe(false)
-      expect(result.resultJson).toBeUndefined()
-    })
   })
 
   describe('execution performance monitoring', () => {
     it('should measure execution time accurately', async () => {
-      const params: ExecutionParams = {
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
+
+      const startTime = Date.now()
+      const result = await executor.executeAgent({
         agent: 'test-agent',
         prompt: 'Quick task',
         cwd: '/tmp',
-      }
-
-      const startTime = Date.now()
-      const result = await executor.executeAgent(params)
+      })
       const endTime = Date.now()
 
       expect(result.executionTime).toBeGreaterThanOrEqual(0)
-      expect(result.executionTime).toBeLessThanOrEqual(endTime - startTime + 100) // Allow 100ms tolerance
+      expect(result.executionTime).toBeLessThanOrEqual(endTime - startTime + 100)
     })
   })
 
   describe('error handling', () => {
     it('should handle invalid execution parameters', async () => {
-      const invalidParams = {
-        agent: '',
-        prompt: '',
-        cwd: '/tmp',
-      } as ExecutionParams
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
 
-      await expect(executor.executeAgent(invalidParams)).rejects.toThrow()
+      await expect(
+        executor.executeAgent({ agent: '', prompt: '', cwd: '/tmp' } as ExecutionParams)
+      ).rejects.toThrow()
     })
 
     it('should handle timeout scenarios', async () => {
-      const timeoutConfig = createExecutionConfig('cursor', {
-        executionTimeout: 100,
-      })
-      const timeoutExecutor = new AgentExecutor(timeoutConfig)
+      mockSpawn.mockImplementationOnce(() =>
+        createMockProcess({
+          noClose: true, // Simulate a process that never finishes
+        })
+      )
 
-      const params: ExecutionParams = {
+      const executor = new AgentExecutor(createExecutionConfig('cursor', { executionTimeout: 100 }))
+
+      const result = await executor.executeAgent({
         agent: 'slow-agent',
         prompt: 'This takes a long time',
         cwd: '/tmp',
-      }
+      })
 
-      const result = await timeoutExecutor.executeAgent(params)
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr).toContain('timeout')
     })
   })
 
-  describe('AgentExecutionResult extended fields', () => {
-    it('should include hasResult field in execution result', async () => {
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Generate JSON response',
-        cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
-
-      // Test that hasResult field exists and is true when JSON is detected
-      expect(result).toHaveProperty('hasResult')
-      expect(result.hasResult).toBe(true)
-    })
-
-    it('should include resultJson field with parsed JSON when available', async () => {
-      const params: ExecutionParams = {
-        agent: 'test-agent',
-        prompt: 'Generate structured data',
-        cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
-
-      // Test that resultJson field exists with the parsed JSON
-      expect(result).toHaveProperty('resultJson')
-      expect(result.resultJson).toEqual({
-        type: 'result',
-        data: 'Test execution successful',
-      })
-    })
-
-    it('should set hasResult to false when no JSON is detected', async () => {
-      const params: ExecutionParams = {
-        agent: 'bad-agent',
-        prompt: 'This will fail',
-        cwd: '/tmp',
-      }
-
-      const result = await executor.executeAgent(params)
-
-      // Test that hasResult is false when execution fails
-      // For failed executions, hasResult and resultJson are explicitly set
-      expect(result.hasResult).toBe(false)
-      expect(result.resultJson).toBeUndefined()
-    })
-
+  describe('SIGTERM and partial results', () => {
     it('should handle SIGTERM (exit code 143) as normal when hasResult is true', async () => {
-      // Mock a scenario where process is killed with SIGTERM after getting JSON
-      const mockProcess = {
-        stdin: { end: vi.fn() },
-        stdout: {
-          on: vi.fn((event, callback) => {
-            if (event === 'data') {
-              // Send result JSON
-              setTimeout(() => {
-                callback(Buffer.from('{"type": "result", "data": "Success"}\n'))
-              }, 10)
-            }
-          }),
-        },
-        stderr: { on: vi.fn() },
-        on: vi.fn((event, callback) => {
-          if (event === 'close') {
-            // Return exit code 143 (SIGTERM)
-            setTimeout(() => callback(143), 50)
-          }
-        }),
-        kill: vi.fn(),
-      }
+      mockSpawn.mockImplementationOnce(() =>
+        createMockProcess({
+          stdoutData: '{"type": "result", "data": "Success"}\n',
+          exitCode: 143,
+        })
+      )
 
-      mockSpawn.mockImplementationOnce(() => mockProcess as any)
+      const executor = new AgentExecutor(createExecutionConfig('cursor'))
 
-      const params: ExecutionParams = {
+      const result = await executor.executeAgent({
         agent: 'test-agent',
         prompt: 'Stream JSON data',
         cwd: '/tmp',
-      }
+      })
 
-      const result = await executor.executeAgent(params)
-
-      // Should recognize exit code 143 with hasResult=true as success
       expect(result.exitCode).toBe(143)
       expect(result.hasResult).toBe(true)
       expect(result.resultJson).toBeDefined()
     })
 
     it('should distinguish timeout with partial result from complete timeout', async () => {
-      const timeoutConfig = createExecutionConfig('cursor', {
-        executionTimeout: 100,
-      })
-      const timeoutExecutor = new AgentExecutor(timeoutConfig)
+      mockSpawn.mockImplementationOnce(() =>
+        createMockProcess({
+          stdoutData: '{"type": "result", "partial": true}\n',
+          stdoutDelay: 50,
+          noClose: true, // Let timeout handler fire
+        })
+      )
 
-      // Mock process that sends JSON but times out
-      const mockProcess = {
-        stdin: { end: vi.fn() },
-        stdout: {
-          on: vi.fn((event, callback) => {
-            if (event === 'data') {
-              // Send partial result before timeout
-              setTimeout(() => {
-                callback(Buffer.from('{"type": "result", "partial": true}\n'))
-              }, 50)
-            }
-          }),
-        },
-        stderr: { on: vi.fn() },
-        on: vi.fn((event, callback) => {
-          if (event === 'close') {
-            // Simulate timeout exit code 124
-            setTimeout(() => callback(124), 150)
-          }
-        }),
-        kill: vi.fn(),
-      }
+      const executor = new AgentExecutor(createExecutionConfig('cursor', { executionTimeout: 100 }))
 
-      mockSpawn.mockImplementationOnce(() => mockProcess as any)
-
-      const params: ExecutionParams = {
+      const result = await executor.executeAgent({
         agent: 'partial-agent',
         prompt: 'Partial completion',
         cwd: '/tmp',
-      }
+      })
 
-      const result = await timeoutExecutor.executeAgent(params)
-
-      // Should have partial result even with timeout
       expect(result.exitCode).toBe(124)
       expect(result.hasResult).toBe(true)
       expect(result.resultJson).toEqual({ type: 'result', partial: true })

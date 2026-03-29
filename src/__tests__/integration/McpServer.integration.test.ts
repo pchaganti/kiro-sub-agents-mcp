@@ -21,6 +21,11 @@ describe('McpServer Integration', () => {
       logLevel: 'info',
       agentType: 'cursor',
       executionTimeoutMs: 300000,
+      sessionEnabled: false,
+      sessionDir: '.mcp-sessions',
+      sessionRetentionDays: 1,
+      agentsSettingsPath: undefined,
+      cursorApiKey: undefined,
     }
   })
 

@@ -358,7 +358,7 @@ export class AgentResources {
     }
 
     const agentNameMatch = uri.match(/^agents:\/\/(.+)$/)
-    if (!agentNameMatch || !agentNameMatch[1]) {
+    if (!agentNameMatch?.[1]) {
       return false
     }
 

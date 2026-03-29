@@ -275,6 +275,9 @@ export class RunAgentTool {
           ...(validatedParams.extra_args !== undefined && {
             extra_args: validatedParams.extra_args,
           }),
+          ...(agentDefinition?.filePath !== undefined && {
+            agentFilePath: agentDefinition.filePath,
+          }),
         }
 
         // Report progress: Executing agent

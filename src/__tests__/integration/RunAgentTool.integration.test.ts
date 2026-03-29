@@ -25,6 +25,11 @@ describe('RunAgentTool', () => {
       agentType: 'cursor',
       logLevel: 'info',
       executionTimeoutMs: 300000,
+      sessionEnabled: false,
+      sessionDir: '.mcp-sessions',
+      sessionRetentionDays: 1,
+      agentsSettingsPath: undefined,
+      cursorApiKey: undefined,
     }
 
     const executionConfig = createExecutionConfig('cursor')
