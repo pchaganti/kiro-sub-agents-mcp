@@ -50,9 +50,6 @@ tests/
 *.spec.*
 **/__tests__/
 
-# Build artifacts (except dist)
-graph.svg
-
 # Development dependencies config
 lint-staged.config.js
 
