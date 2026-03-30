@@ -45,7 +45,7 @@ Choose **sub-agents-mcp** for production use with reliability features. Choose *
 
 ## Prerequisites
 
-- Node.js 20 or higher
+- Node.js 22 or higher
 - One of these execution engines (they actually run the sub-agents):
   - `cursor-agent` CLI (from Cursor)
   - `claude` CLI (from Claude Code)
