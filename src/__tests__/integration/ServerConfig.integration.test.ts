@@ -48,6 +48,13 @@ describe('ServerConfig', () => {
     expect(config.agentType).toBe('gemini')
   })
 
+  it('should throw error when AGENT_TYPE is an unsupported value', () => {
+    vi.stubEnv('AGENTS_DIR', testAgentsDir)
+    vi.stubEnv('AGENT_TYPE', 'malicious-agent')
+
+    expect(() => new ServerConfig()).toThrow(/Invalid AGENT_TYPE/)
+  })
+
   it('should throw error when AGENTS_DIR is not set', () => {
     // Ensure AGENTS_DIR is not set
     vi.stubEnv('AGENTS_DIR', undefined)

@@ -116,7 +116,7 @@ describe('Security Validation Tests', () => {
     // Set test environment variables
     process.env.SERVER_NAME = 'security-test-server'
     process.env.AGENTS_DIR = testAgentsDir
-    process.env.AGENT_TYPE = 'test'
+    process.env.AGENT_TYPE = 'cursor'
 
     config = new ServerConfig()
 

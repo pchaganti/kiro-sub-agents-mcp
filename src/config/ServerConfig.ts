@@ -76,8 +76,13 @@ export class ServerConfig {
     }
     this.agentsDir = agentsDir
 
-    this.agentType =
-      (process.env['AGENT_TYPE'] as 'cursor' | 'claude' | 'gemini' | 'codex') || 'cursor'
+    const agentTypeEnv = process.env['AGENT_TYPE']?.trim()
+    if (agentTypeEnv && !['cursor', 'claude', 'gemini', 'codex'].includes(agentTypeEnv)) {
+      throw new Error(
+        `Invalid AGENT_TYPE: "${agentTypeEnv}". Must be one of: cursor, claude, gemini, codex.`
+      )
+    }
+    this.agentType = (agentTypeEnv as 'cursor' | 'claude' | 'gemini' | 'codex') || 'cursor'
     this.logLevel = (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') || 'info'
 
     const timeoutEnv = process.env['EXECUTION_TIMEOUT_MS']
