@@ -59,7 +59,7 @@ export interface ExecutionConfig {
    * Type of agent to use for execution.
    * 'cursor', 'claude', 'gemini', or 'codex'
    */
-  agentType: 'cursor' | 'claude' | 'gemini' | 'codex'
+  agentType: AgentType
 
   /**
    * Path to CLI settings file/directory.
@@ -81,12 +81,24 @@ export interface ExecutionConfig {
 export const DEFAULT_EXECUTION_TIMEOUT = 300000 // 5 minutes
 
 /**
+ * Supported agent runtimes. Single source of truth for both runtime validation
+ * (ServerConfig) and static typing.
+ */
+export const AGENT_TYPES = ['cursor', 'claude', 'gemini', 'codex'] as const
+
+export type AgentType = (typeof AGENT_TYPES)[number]
+
+export function isAgentType(value: unknown): value is AgentType {
+  return typeof value === 'string' && (AGENT_TYPES as readonly string[]).includes(value)
+}
+
+/**
  * Creates a complete ExecutionConfig with the provided agent type.
  * @param agentType - The type of agent to use
  * @param overrides - Optional overrides for configuration values
  */
 export function createExecutionConfig(
-  agentType: 'cursor' | 'claude' | 'gemini' | 'codex',
+  agentType: AgentType,
   overrides?: Partial<Omit<ExecutionConfig, 'agentType'>>
 ): ExecutionConfig {
   return {

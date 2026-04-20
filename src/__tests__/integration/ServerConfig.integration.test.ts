@@ -8,8 +8,11 @@ describe('ServerConfig', () => {
   let testAgentsDir: string
 
   beforeEach(() => {
-    // Reset environment variables before each test
+    // Reset mocks and environment variable stubs before each test
+    // to prevent leakage between tests (e.g., LOG_LEVEL set in one test
+    // affecting ServerConfig construction in another)
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
 
     // Create a temporary test directory that exists
     testAgentsDir = path.join(tmpdir(), `test-agents-${Date.now()}`)
@@ -17,6 +20,7 @@ describe('ServerConfig', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
     // Clean up test directory
     try {
       fs.rmSync(testAgentsDir, { recursive: true, force: true })
@@ -39,13 +43,32 @@ describe('ServerConfig', () => {
     expect(config.agentType).toBe('claude')
   })
 
-  it('should load AGENT_TYPE as gemini when set', () => {
+  it.each([
+    'cursor',
+    'claude',
+    'gemini',
+    'codex',
+  ] as const)('should accept AGENT_TYPE=%s', (agentType) => {
     vi.stubEnv('AGENTS_DIR', testAgentsDir)
-    vi.stubEnv('AGENT_TYPE', 'gemini')
+    vi.stubEnv('AGENT_TYPE', agentType)
 
     const config = new ServerConfig()
 
-    expect(config.agentType).toBe('gemini')
+    expect(config.agentType).toBe(agentType)
+  })
+
+  it('should throw error when AGENT_TYPE is an unsupported value', () => {
+    vi.stubEnv('AGENTS_DIR', testAgentsDir)
+    vi.stubEnv('AGENT_TYPE', 'malicious-agent')
+
+    expect(() => new ServerConfig()).toThrow(/Invalid AGENT_TYPE/)
+  })
+
+  it('should throw error when LOG_LEVEL is an unsupported value', () => {
+    vi.stubEnv('AGENTS_DIR', testAgentsDir)
+    vi.stubEnv('LOG_LEVEL', 'verbose')
+
+    expect(() => new ServerConfig()).toThrow(/Invalid LOG_LEVEL/)
   })
 
   it('should throw error when AGENTS_DIR is not set', () => {
