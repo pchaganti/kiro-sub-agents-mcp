@@ -32,7 +32,7 @@ import { AgentResources } from '../resources/AgentResources.js'
 import { SessionManager } from '../session/SessionManager.js'
 import { RunAgentTool } from '../tools/RunAgentTool.js'
 import { AppError, ValidationError } from '../utils/ErrorHandler.js'
-import { Logger } from '../utils/Logger.js'
+import { Logger, type LogLevel } from '../utils/Logger.js'
 
 /**
  * Server information interface for MCP server identification
@@ -41,11 +41,6 @@ interface ServerInfo {
   name: string
   version: string
 }
-
-/**
- * Logger function type for structured logging
- */
-type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 /**
  * MCP Server class providing foundational server functionality

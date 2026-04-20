@@ -1,3 +1,6 @@
+import { AGENT_TYPES, type AgentType, isAgentType } from '../execution/AgentExecutor.js'
+import { isLogLevel, LOG_LEVELS, type LogLevel } from '../utils/Logger.js'
+
 /**
  * Server configuration management class.
  *
@@ -26,10 +29,10 @@ export class ServerConfig {
   public readonly agentsDir: string
 
   /** Type of agent to use for execution */
-  public readonly agentType: 'cursor' | 'claude' | 'gemini' | 'codex'
+  public readonly agentType: AgentType
 
   /** Log level for server operations */
-  public readonly logLevel: 'debug' | 'info' | 'warn' | 'error'
+  public readonly logLevel: LogLevel
 
   /** Maximum execution timeout in milliseconds for agent execution */
   public readonly executionTimeoutMs: number
@@ -77,13 +80,26 @@ export class ServerConfig {
     this.agentsDir = agentsDir
 
     const agentTypeEnv = process.env['AGENT_TYPE']?.trim()
-    if (agentTypeEnv && !['cursor', 'claude', 'gemini', 'codex'].includes(agentTypeEnv)) {
+    if (!agentTypeEnv) {
+      this.agentType = 'cursor'
+    } else if (isAgentType(agentTypeEnv)) {
+      this.agentType = agentTypeEnv
+    } else {
       throw new Error(
-        `Invalid AGENT_TYPE: "${agentTypeEnv}". Must be one of: cursor, claude, gemini, codex.`
+        `Invalid AGENT_TYPE: "${agentTypeEnv}". Must be one of: ${AGENT_TYPES.join(', ')}.`
       )
     }
-    this.agentType = (agentTypeEnv as 'cursor' | 'claude' | 'gemini' | 'codex') || 'cursor'
-    this.logLevel = (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') || 'info'
+
+    const logLevelEnv = process.env['LOG_LEVEL']?.trim()
+    if (!logLevelEnv) {
+      this.logLevel = 'info'
+    } else if (isLogLevel(logLevelEnv)) {
+      this.logLevel = logLevelEnv
+    } else {
+      throw new Error(
+        `Invalid LOG_LEVEL: "${logLevelEnv}". Must be one of: ${LOG_LEVELS.join(', ')}.`
+      )
+    }
 
     const timeoutEnv = process.env['EXECUTION_TIMEOUT_MS']
     if (timeoutEnv?.trim()) {

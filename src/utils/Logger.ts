@@ -2,9 +2,19 @@ import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 
 /**
+ * Supported log levels. Single source of truth for both runtime validation
+ * (ServerConfig) and static typing.
+ */
+export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
+
+/**
  * Log level enumeration for structured logging.
  */
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogLevel = (typeof LOG_LEVELS)[number]
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value)
+}
 
 /**
  * Log entry structure for consistent logging format.
